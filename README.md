@@ -123,6 +123,26 @@ for (Object run : scout.search.listAll()) {
 }
 ```
 
+## Streaming
+
+Stream chat completions and live run progress (search, jobs, find-all, monitors). Both take a `Consumer` invoked per chunk/event:
+
+```java
+// Token-by-token chat
+scout.chat.completions.stream(
+    Map.of("messages", List.of(Map.of("role", "user", "content", "Summarize EU AI regulation."))),
+    chunk -> {
+        var choices = (List<?>) ((Map<?, ?>) chunk).get("choices");
+        var delta = (Map<?, ?>) ((Map<?, ?>) choices.get(0)).get("delta");
+        System.out.print(delta.getOrDefault("content", ""));
+    });
+
+// Live progress events from a deep-search run
+scout.search.streamEvents(searchId, event -> System.out.println(((Map<?, ?>) event).get("type")));
+```
+
+`streamEvents` is also available on `jobs`, `lists.runs`, and `monitors`.
+
 ## Versioning
 
 This SDK follows [SemVer](https://semver.org/) and sends the targeted Scout API version on every request; see [`CHANGELOG.md`](./CHANGELOG.md).

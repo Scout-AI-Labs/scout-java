@@ -7,6 +7,7 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +25,20 @@ public class ScoutTest {
             ex.getResponseHeaders().add("X-Request-Id", "req_abc123");
             byte[] b = body.getBytes(StandardCharsets.UTF_8);
             ex.sendResponseHeaders(code, b.length);
+            try (OutputStream os = ex.getResponseBody()) {
+                os.write(b);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    static void sse(HttpExchange ex, String body) {
+        try {
+            ex.getResponseHeaders().add("Content-Type", "text/event-stream");
+            ex.getResponseHeaders().add("X-Request-Id", "req_abc123");
+            byte[] b = body.getBytes(StandardCharsets.UTF_8);
+            ex.sendResponseHeaders(200, b.length);
             try (OutputStream os = ex.getResponseBody()) {
                 os.write(b);
             }
@@ -55,6 +70,14 @@ public class ScoutTest {
         });
         srv.createContext("/v1/company", ex -> send(ex, 401, "{\"detail\":\"invalid api key\"}"));
         srv.createContext("/v1/searches", ex -> send(ex, 200, "{\"items\":[{\"id\":1}]}"));
+        srv.createContext("/v1/chat/completions", ex -> sse(ex,
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n"
+                        + "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n"
+                        + "data: [DONE]\n\n"));
+        srv.createContext("/v1/searches/abc/events", ex -> sse(ex,
+                ": keepalive\n\n"
+                        + "event: run.progress\ndata: {\"type\":\"run.progress\"}\n\n"
+                        + "event: run.completed\ndata: {\"type\":\"run.completed\"}\n\n"));
         srv.start();
         int port = srv.getAddress().getPort();
 
@@ -101,6 +124,22 @@ public class ScoutTest {
         List<Object> all = scout.search.listAll();
         assert all.size() == 1 : "paginate";
         System.out.println("ok - pagination listAll");
+
+        StringBuilder content = new StringBuilder();
+        scout.chat.completions.stream(
+                Map.of("messages", List.of(Map.of("role", "user", "content", "hi"))),
+                chunk -> {
+                    List<?> choices = (List<?>) ((Map<?, ?>) chunk).get("choices");
+                    Map<?, ?> delta = (Map<?, ?>) ((Map<?, ?>) choices.get(0)).get("delta");
+                    content.append(delta.get("content"));
+                });
+        assert content.toString().equals("Hello") : "chat stream: " + content;
+        System.out.println("ok - chat completions stream");
+
+        List<String> types = new ArrayList<>();
+        scout.search.streamEvents("abc", evt -> types.add((String) ((Map<?, ?>) evt).get("type")));
+        assert types.equals(List.of("run.progress", "run.completed")) : "events: " + types;
+        System.out.println("ok - streamEvents");
 
         System.out.println("ALL PASSED");
         srv.stop(0);

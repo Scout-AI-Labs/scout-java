@@ -1,6 +1,9 @@
 package com.scout;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -16,6 +19,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Consumer;
 
 /**
  * Client for the Scout web-intelligence API.
@@ -158,6 +162,113 @@ public final class Scout {
             }
         });
         throw e;
+    }
+
+    /** Open a streaming (SSE) request, invoking onEvent per event. Internal. */
+    void stream(String method, String path, Map<String, Object> body, Consumer<Map<String, String>> onEvent) {
+        String url = baseUrl + path;
+        boolean isWrite = !method.equals("GET");
+        String bodyJson = (body != null && isWrite) ? Json.stringify(body) : null;
+
+        HttpRequest.Builder rb = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", "Bearer " + apiKey)
+                .header("Accept", "text/event-stream")
+                .header("User-Agent", "scout-java/" + VERSION)
+                .header("Scout-Version", API_VERSION)
+                .method(method, bodyJson != null
+                        ? HttpRequest.BodyPublishers.ofString(bodyJson)
+                        : HttpRequest.BodyPublishers.noBody());
+        if (bodyJson != null) {
+            rb.header("Content-Type", "application/json");
+        }
+        if (isWrite) {
+            rb.header("Idempotency-Key", UUID.randomUUID().toString());
+        }
+
+        HttpResponse<InputStream> resp;
+        try {
+            resp = http.send(rb.build(), HttpResponse.BodyHandlers.ofInputStream());
+        } catch (HttpTimeoutException e) {
+            throw new TimeoutException("Request timed out", e);
+        } catch (IOException e) {
+            throw new ConnectionException(e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ConnectionException("Request interrupted", e);
+        }
+
+        int status = resp.statusCode();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(resp.body(), StandardCharsets.UTF_8))) {
+            if (status < 200 || status >= 300) {
+                StringBuilder sb = new StringBuilder();
+                String l;
+                while ((l = reader.readLine()) != null) {
+                    sb.append(l).append('\n');
+                }
+                Object parsed = sb.length() == 0 ? null : tryParse(sb.toString());
+                ApiException e = new ApiException(errorMessage(parsed, status), status,
+                        resp.headers().firstValue("x-request-id").orElse(null),
+                        errorCode(parsed), parsed);
+                throw e;
+            }
+            String line;
+            String event = null;
+            List<String> data = new ArrayList<>();
+            while ((line = reader.readLine()) != null) {
+                if (line.isEmpty()) {
+                    if (!data.isEmpty()) {
+                        emit(onEvent, event, data);
+                        event = null;
+                        data.clear();
+                    }
+                    continue;
+                }
+                if (line.startsWith(":")) {
+                    continue;
+                }
+                int i = line.indexOf(':');
+                String field = i < 0 ? line : line.substring(0, i);
+                String value = i < 0 ? "" : line.substring(i + 1);
+                if (value.startsWith(" ")) {
+                    value = value.substring(1);
+                }
+                if (field.equals("event")) {
+                    event = value;
+                } else if (field.equals("data")) {
+                    data.add(value);
+                }
+            }
+            if (!data.isEmpty()) {
+                emit(onEvent, event, data);
+            }
+        } catch (IOException e) {
+            throw new ConnectionException(e.getMessage(), e);
+        }
+    }
+
+    private static void emit(Consumer<Map<String, String>> onEvent, String event, List<String> data) {
+        Map<String, String> evt = new LinkedHashMap<>();
+        evt.put("event", event == null ? "" : event);
+        evt.put("data", String.join("\n", data));
+        onEvent.accept(evt);
+    }
+
+    private void streamSse(String path, Consumer<Object> onEvent) {
+        stream("GET", path, null, evt -> {
+            if (!"[DONE]".equals(evt.get("data"))) {
+                onEvent.accept(Json.parse(evt.get("data")));
+            }
+        });
+    }
+
+    private static Object tryParse(String text) {
+        try {
+            return Json.parse(text);
+        } catch (RuntimeException ex) {
+            return text;
+        }
     }
 
     private boolean isRetriable(ScoutException e) {
@@ -356,6 +467,11 @@ public final class Scout {
         public Object events(String searchId) {
             return request("GET", "/v1/searches/" + enc(searchId) + "/events", null, null);
         }
+
+        /** Stream a deep-search run's progress events live (SSE). */
+        public void streamEvents(String searchId, Consumer<Object> onEvent) {
+            streamSse("/v1/searches/" + enc(searchId) + "/events", onEvent);
+        }
     }
 
     /** Single-page operations: markdown, html, screenshot, images, extract. */
@@ -465,6 +581,11 @@ public final class Scout {
         public Object events(String findallId) {
             return request("GET", "/v1/lists/runs/" + enc(findallId) + "/events", null, null);
         }
+
+        /** Stream a find-all run's progress events live (SSE). */
+        public void streamEvents(String findallId, Consumer<Object> onEvent) {
+            streamSse("/v1/lists/runs/" + enc(findallId) + "/events", onEvent);
+        }
     }
 
     /** Product extraction from storefronts. */
@@ -513,6 +634,11 @@ public final class Scout {
 
         public Object events(String taskId) {
             return request("GET", "/v1/jobs/" + enc(taskId) + "/events", null, null);
+        }
+
+        /** Stream a job's progress events live (SSE). */
+        public void streamEvents(String taskId, Consumer<Object> onEvent) {
+            streamSse("/v1/jobs/" + enc(taskId) + "/events", onEvent);
         }
 
         public Object startRun(Map<String, Object> body) {
@@ -569,6 +695,11 @@ public final class Scout {
         public Object events(String monitorId) {
             return request("GET", "/v1/monitors/" + enc(monitorId) + "/events", null, null);
         }
+
+        /** Stream a monitor's events live (SSE). */
+        public void streamEvents(String monitorId, Consumer<Object> onEvent) {
+            streamSse("/v1/monitors/" + enc(monitorId) + "/events", onEvent);
+        }
     }
 
     /** OpenAI-compatible chat completions, optionally grounded with web search. */
@@ -580,6 +711,21 @@ public final class Scout {
     public final class ChatCompletions {
         public Object create(Map<String, Object> params) {
             return request("POST", "/v1/chat/completions", params, null);
+        }
+
+        /**
+         * Stream a chat completion as OpenAI-style chunks. {@code onChunk}
+         * receives each decoded chunk (a Map); read token text from
+         * {@code choices[0].delta.content}.
+         */
+        public void stream(Map<String, Object> params, Consumer<Object> onChunk) {
+            Map<String, Object> body = new LinkedHashMap<>(params);
+            body.put("stream", true);
+            Scout.this.stream("POST", "/v1/chat/completions", body, evt -> {
+                if (!"[DONE]".equals(evt.get("data"))) {
+                    onChunk.accept(Json.parse(evt.get("data")));
+                }
+            });
         }
     }
 
