@@ -1,9 +1,9 @@
 # Scout Java SDK
 
-Official Java SDK for the [Scout](https://usescout.sh) web-intelligence API — search, scrape, screenshot, extract, crawl, and company enrichment.
+Official Java SDK for the [Scout](https://usescout.sh) web-intelligence API: search, scrape, screenshot, extract, crawl, and company enrichment.
 
-- **Zero runtime dependencies.** Built on the JDK's `java.net.http` client and a small embedded JSON codec.
-- **Resilient.** Automatic retries with backoff + jitter, configurable timeouts, idempotency keys.
+- Built on the JDK's `java.net.http` client and a small embedded JSON codec.
+- Automatic retries with backoff and jitter, configurable timeouts, and idempotency keys on writes.
 
 ## Requirements
 
@@ -29,7 +29,7 @@ implementation 'sh.usescout:scout-sdk:0.1.0'
 
 ## Authentication
 
-Create an API key in the [Scout dashboard](https://usescout.sh). The client reads `SCOUT_API_KEY` from the environment by default:
+Generate an API key at [platform.usescout.sh/settings](https://platform.usescout.sh/settings). The client reads `SCOUT_API_KEY` from the environment by default:
 
 ```java
 import com.scout.Scout;
@@ -103,7 +103,7 @@ Predicates: `isBadRequest` (400), `isAuthentication` (401), `isInsufficientCredi
 
 ## Retries & timeouts
 
-Transient failures (connection errors, timeouts, 408/409/429/5xx) are retried automatically — **2 times by default**, with exponential backoff + jitter, honoring `Retry-After`. Write methods send an auto-generated `Idempotency-Key`.
+Transient failures (connection errors, timeouts, 408/409/429/5xx) are retried automatically, **2 times by default**, with exponential backoff and jitter, honoring `Retry-After`. Write methods send an auto-generated `Idempotency-Key`.
 
 ```java
 import java.time.Duration;

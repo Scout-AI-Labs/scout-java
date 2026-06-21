@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>Scout Java SDK</name>
-    <description>Official Java SDK for the Scout web-intelligence API (zero dependencies)</description>
+    <description>Official Java SDK for the Scout web-intelligence API</description>
     <url>https://usescout.sh</url>
 
     <licenses>
