@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ["11", "17", "21"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - name: Compile
+        run: javac -d out src/main/java/com/scout/*.java
+      - name: Compile tests
+        run: javac -cp out -d out src/test/java/ScoutTest.java
+      - name: Test
+        run: java -ea -cp out ScoutTest
